@@ -2,18 +2,24 @@
 import imaplib
 import email
 import json
+import os
 import subprocess
 import requests
 import re
 import smtplib
+import shutil
 from datetime import datetime, timedelta
 from email.header import decode_header
 from env import ACCOUNTS, WHITELIST
 
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+
 # ---------------------------------------------------------------------------
 # Account configuration — add/remove accounts here
 # ---------------------------------------------------------------------------
-DAYS_BACK = 14      # How many days of email to scan
+DAYS_BACK = 1       # How many days of email to scan
+CLAUDE_BIN = shutil.which("claude") or "/home/fdroid/.nvm/versions/node/v24.14.1/bin/claude"
 DRY_RUN = False      # Set False when you're happy with classifications
 CHUNK_SIZE = 50     # Emails per Claude classification call
 
@@ -119,7 +125,7 @@ Emails to classify:
 {json.dumps(emails, indent=2)}"""
 
     result = subprocess.run(
-        ["claude", "-p", prompt, "--output-format", "json"],
+        [CLAUDE_BIN, "-p", prompt, "--output-format", "json"],
         capture_output=True,
         text=True,
         timeout=180,
@@ -205,8 +211,9 @@ Do not browse to any URL other than the unsubscribe URL found in the email body.
 
     result = subprocess.run(
         [
-            "claude", "-p", prompt,
+            CLAUDE_BIN, "-p", prompt,
             "--allowedTools", "Bash",
+            "--permission-mode", "auto",
             "--output-format", "json",
         ],
         capture_output=True,
