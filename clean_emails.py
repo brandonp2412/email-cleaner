@@ -45,14 +45,14 @@ def fetch_emails(account):
     mail.select("INBOX")
 
     since = (datetime.now() - timedelta(days=DAYS_BACK)).strftime("%d-%b-%Y")
-    _, data = mail.search(None, f'(SINCE "{since}")')
+    _, data = mail.uid("search", None, f'(SINCE "{since}")')
     msg_ids = data[0].split()
     print(f"[{account['name']}] {len(msg_ids)} emails in last {DAYS_BACK} days")
 
     emails = []
     for uid in msg_ids:
         try:
-            _, msg_data = mail.fetch(uid, "(RFC822.HEADER)")
+            _, msg_data = mail.uid("fetch", uid, "(RFC822.HEADER)")
             msg = email.message_from_bytes(msg_data[0][1])
             emails.append({
                 "uid": uid.decode(),
@@ -74,7 +74,7 @@ def fetch_full_body(account, uid):
     mail.login(account["username"], account["password"])
     mail.select("INBOX")
 
-    _, msg_data = mail.fetch(uid, "(RFC822)")
+    _, msg_data = mail.uid("fetch", uid, "(RFC822)")
     msg = email.message_from_bytes(msg_data[0][1])
 
     body = ""
@@ -289,7 +289,7 @@ def delete_email(account, uid):
     mail = imaplib.IMAP4_SSL(account["imap_host"], account["imap_port"])
     mail.login(account["username"], account["password"])
     mail.select("INBOX")
-    mail.store(uid, "+FLAGS", "\\Deleted")
+    mail.uid("store", uid, "+FLAGS", "\\Deleted")
     mail.expunge()
     mail.logout()
 
@@ -302,10 +302,10 @@ def mark_spam_and_delete(account, uid):
     # Try Gmail spam folder, fall back to plain delete
     if "gmail.com" in account["imap_host"]:
         mail.select("INBOX")
-        mail.copy(uid, "[Gmail]/Spam")
+        mail.uid("copy", uid, "[Gmail]/Spam")
 
     mail.select("INBOX")
-    mail.store(uid, "+FLAGS", "\\Deleted")
+    mail.uid("store", uid, "+FLAGS", "\\Deleted")
     mail.expunge()
     mail.logout()
 
