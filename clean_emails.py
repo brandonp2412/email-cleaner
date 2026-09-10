@@ -18,9 +18,9 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 # ---------------------------------------------------------------------------
 # Account configuration — add/remove accounts here
 # ---------------------------------------------------------------------------
-DAYS_BACK = 1       # How many days of email to scan
+DAYS_BACK = 14      # How many days of email to scan
 CLAUDE_BIN = shutil.which("claude") or "/home/fdroid/.nvm/versions/node/v24.14.1/bin/claude"
-DRY_RUN = False      # Set False when you're happy with classifications
+DRY_RUN = True      # Preview classifications without modifying email by default
 CHUNK_SIZE = 50     # Emails per Claude classification call
 
 # ---------------------------------------------------------------------------
@@ -88,12 +88,18 @@ def fetch_full_body(account, uid):
         for part in msg.walk():
             ct = part.get_content_type()
             if ct == "text/html":
-                body = part.get_payload(decode=True).decode("utf-8", errors="ignore")
-                break
+                payload = part.get_payload(decode=True)
+                if payload is not None:
+                    body = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
+                    break
             if ct == "text/plain" and not body:
-                body = part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                payload = part.get_payload(decode=True)
+                if payload is not None:
+                    body = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
     else:
-        body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+        payload = msg.get_payload(decode=True)
+        if payload is not None:
+            body = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
 
     mail.logout()
     return body
@@ -136,10 +142,12 @@ Emails to classify:
 
     response = json.loads(result.stdout)
     text = response.get("result", "").strip()
-    # Strip markdown fences if present
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
-    return json.loads(text)
+    classifications = json.loads(text)
+    if not isinstance(classifications, list):
+        raise ValueError("Claude classification result must be a JSON array")
+    return classifications
 
 
 # ---------------------------------------------------------------------------
@@ -162,16 +170,20 @@ def get_unsubscribe_mailto(header):
 
 def find_unsubscribe_in_body(html):
     """Extract the most likely unsubscribe URL from an HTML email body."""
-    # Find all <a href="...">...</a> tags
     anchors = re.findall(r'<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html, re.IGNORECASE | re.DOTALL)
     keywords = ("unsubscribe", "opt out", "opt-out", "manage preferences", "email preferences")
     for href, text in anchors:
         combined = (href + " " + re.sub(r"<[^>]+>", "", text)).lower()
         if any(k in combined for k in keywords):
             return href
-    # Fallback: bare URL containing "unsub" in the text
     bare = re.findall(r'https?://[^\s"\'<>]+unsub[^\s"\'<>]*', html, re.IGNORECASE)
     return bare[0] if bare else None
+
+
+def visit_unsubscribe_url(url):
+    """Visit an unsubscribe URL and fail on HTTP errors instead of reporting false success."""
+    response = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+    response.raise_for_status()
 
 
 def unsubscribe_via_claude(account, email_data, full_body=""):
@@ -221,10 +233,17 @@ Do not browse to any URL other than the unsubscribe URL found in the email body.
         timeout=180,
     )
 
-    response = json.loads(result.stdout) if result.stdout.strip() else {}
+    if result.returncode != 0:
+        print(f"  ↳ Claude unsubscribe failed: {result.stderr[:200]}")
+        return False
+    try:
+        response = json.loads(result.stdout) if result.stdout.strip() else {}
+    except json.JSONDecodeError:
+        print("  ↳ Claude unsubscribe returned invalid JSON")
+        return False
     output = response.get("result", "")
     print(f"  ↳ Claude: {output[:200]}")
-    return "SKIP" not in output.upper()
+    return bool(output.strip()) and "SKIP" not in output.upper()
 
 
 def do_unsubscribe(account, email_data):
@@ -235,13 +254,13 @@ def do_unsubscribe(account, email_data):
 
     if url:
         try:
-            requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            visit_unsubscribe_url(url)
             print("  ↳ Unsubscribed via List-Unsubscribe URL")
-            return
+            return True
         except Exception as e:
-            print(f"  ↳ Header URL failed ({e}), falling back to Claude")
+            print(f"  ↳ Header URL failed ({e}), trying other methods")
 
-    elif mailto:
+    if mailto:
         try:
             addr, _, params = mailto.partition("?")
             subject = "Unsubscribe"
@@ -262,11 +281,10 @@ def do_unsubscribe(account, email_data):
                 )
                 smtp.sendmail(account["username"], addr, msg_text)
             print(f"  ↳ Unsubscribed via mailto: {addr}")
-            return
+            return True
         except Exception as e:
-            print(f"  ↳ mailto failed ({e}), falling back to Claude")
+            print(f"  ↳ mailto failed ({e}), trying other methods")
 
-    # No header or header failed — try extracting link from body
     try:
         full_body = fetch_full_body(account, email_data["uid"])
         body_url = find_unsubscribe_in_body(full_body)
@@ -277,15 +295,14 @@ def do_unsubscribe(account, email_data):
 
     if body_url:
         try:
-            requests.get(body_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            visit_unsubscribe_url(body_url)
             print("  ↳ Unsubscribed via body link")
-            return
+            return True
         except Exception as e:
             print(f"  ↳ Body link failed ({e}), falling back to Claude")
 
-    # Last resort — Claude with Bash to handle interactive unsubscribe pages
     print("  ↳ Handing off to Claude for interactive unsubscribe...")
-    unsubscribe_via_claude(account, email_data, full_body)
+    return unsubscribe_via_claude(account, email_data, full_body)
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +313,10 @@ def delete_email(account, uid):
     mail = imaplib.IMAP4_SSL(account["imap_host"], account["imap_port"])
     mail.login(account["username"], account["password"])
     mail.select("INBOX")
-    mail.uid("store", uid, "+FLAGS", "\\Deleted")
+    status, _ = mail.uid("store", uid, "+FLAGS", "\\Deleted")
+    if status != "OK":
+        mail.logout()
+        raise RuntimeError(f"IMAP delete failed for uid {uid}")
     mail.expunge()
     mail.logout()
 
@@ -305,14 +325,18 @@ def mark_spam_and_delete(account, uid):
     """For Gmail: move to [Gmail]/Spam. For others: just delete."""
     mail = imaplib.IMAP4_SSL(account["imap_host"], account["imap_port"])
     mail.login(account["username"], account["password"])
-
-    # Try Gmail spam folder, fall back to plain delete
-    if "gmail.com" in account["imap_host"]:
-        mail.select("INBOX")
-        mail.uid("copy", uid, "[Gmail]/Spam")
-
     mail.select("INBOX")
-    mail.uid("store", uid, "+FLAGS", "\\Deleted")
+
+    if "gmail.com" in account["imap_host"]:
+        status, _ = mail.uid("copy", uid, "[Gmail]/Spam")
+        if status != "OK":
+            mail.logout()
+            raise RuntimeError(f"Could not move uid {uid} to Gmail spam")
+
+    status, _ = mail.uid("store", uid, "+FLAGS", "\\Deleted")
+    if status != "OK":
+        mail.logout()
+        raise RuntimeError(f"IMAP delete failed for uid {uid}")
     mail.expunge()
     mail.logout()
 
@@ -322,7 +346,9 @@ def mark_spam_and_delete(account, uid):
 # ---------------------------------------------------------------------------
 
 def resolve_category(item, email_data):
-    category = item.get("category", "keep")
+    category = str(item.get("category", "keep")).lower()
+    if category not in {"spam", "marketing", "keep"}:
+        category = "keep"
     combined = (email_data["from"] + " " + email_data["subject"]).lower()
     if any(w.lower() in combined for w in WHITELIST):
         category = "keep"
@@ -330,27 +356,47 @@ def resolve_category(item, email_data):
 
 
 def process_item(item, email_map, account_map, stats):
-    email_data = email_map.get((item["uid"], item["account"]))
-    if not email_data:
-        return
+    if not isinstance(item, dict):
+        print("  Invalid classification item; leaving email untouched")
+        stats["error"] += 1
+        return None
 
-    account = account_map.get(item["account"])
+    uid = item.get("uid")
+    account_name = item.get("account")
+    if not uid or not account_name:
+        print("  Classification missing uid/account; leaving email untouched")
+        stats["error"] += 1
+        return None
+
+    key = (str(uid), str(account_name))
+    email_data = email_map.get(key)
+    if not email_data:
+        print(f"  Classification references unknown email {key}; ignoring")
+        stats["error"] += 1
+        return key
+
+    account = account_map.get(str(account_name))
     if not account:
-        return
+        print(f"  Unknown account {account_name}; leaving email untouched")
+        stats["error"] += 1
+        return key
 
     category = resolve_category(item, email_data)
     print(f"[{category.upper()}] {email_data['from'][:45]} — {email_data['subject'][:50]}")
 
     if DRY_RUN:
         stats[category] = stats.get(category, 0) + 1
-        return
+        return key
 
     try:
         if category == "spam":
             mark_spam_and_delete(account, email_data["uid"])
             stats["spam"] += 1
         elif category == "marketing":
-            do_unsubscribe(account, email_data)
+            if not do_unsubscribe(account, email_data):
+                print("  ↳ Unsubscribe could not be confirmed; leaving email untouched")
+                stats["error"] += 1
+                return key
             delete_email(account, email_data["uid"])
             stats["marketing"] += 1
         else:
@@ -358,6 +404,7 @@ def process_item(item, email_map, account_map, stats):
     except Exception as e:
         print(f"  Error processing {email_data['uid']}: {e}")
         stats["error"] += 1
+    return key
 
 
 def process_chunk(chunk, account_map, stats):
@@ -369,13 +416,24 @@ def process_chunk(chunk, account_map, stats):
         return
 
     email_map = {(e["uid"], e["account"]): e for e in chunk}
+    processed = set()
     for item in classifications:
-        process_item(item, email_map, account_map, stats)
+        key = process_item(item, email_map, account_map, stats)
+        if key is not None and key in email_map:
+            if key in processed:
+                print(f"  Duplicate classification for {key}; ignoring duplicate")
+                continue
+            processed.add(key)
+
+    missing = set(email_map) - processed
+    if missing:
+        print(f"  Classifier omitted {len(missing)} email(s); leaving them untouched")
+        stats["error"] += len(missing)
 
 
 def main():
     if not ACCOUNTS:
-        print("No accounts configured. Edit the ACCOUNTS list in clean_emails.py.")
+        print("No accounts configured. Edit env.py and add at least one account.")
         return
 
     all_emails = []
