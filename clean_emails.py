@@ -10,6 +10,7 @@ import smtplib
 import shutil
 from datetime import datetime, timedelta
 from email.header import decode_header
+from email.utils import parseaddr
 from urllib.parse import parse_qs
 from env import ACCOUNTS, WHITELIST
 
@@ -346,12 +347,21 @@ def mark_spam_and_delete(account, uid):
 # ---------------------------------------------------------------------------
 
 def resolve_category(item, email_data):
-    category = str(item.get("category", "keep")).lower()
+    category = str(item.get("category", "keep")).strip().lower()
     if category not in {"spam", "marketing", "keep"}:
         category = "keep"
-    combined = (email_data["from"] + " " + email_data["subject"]).lower()
-    if any(w.lower() in combined for w in WHITELIST):
-        category = "keep"
+
+    sender = parseaddr(email_data.get("from", ""))[1].strip().lower()
+    sender_domain = sender.rpartition("@")[2] if "@" in sender else ""
+    for entry in WHITELIST:
+        allowed = str(entry).strip().lower().lstrip("@")
+        if not allowed:
+            continue
+        if "@" in allowed:
+            if sender == allowed:
+                return "keep"
+        elif sender_domain == allowed or sender_domain.endswith("." + allowed):
+            return "keep"
     return category
 
 
@@ -415,24 +425,36 @@ def process_chunk(chunk, account_map, stats):
         stats["error"] += len(chunk)
         return
 
+    if not isinstance(classifications, list):
+        print("  Classification failed: expected a JSON array")
+        stats["error"] += len(chunk)
+        return
+
     email_map = {(e["uid"], e["account"]): e for e in chunk}
     processed = set()
     for item in classifications:
-        candidate_key = None
-        if isinstance(item, dict) and item.get("uid") and item.get("account"):
-            candidate_key = (str(item["uid"]), str(item["account"]))
-            if candidate_key in processed:
-                print(f"  Duplicate classification for {candidate_key}; ignoring duplicate")
-                continue
+        if not isinstance(item, dict) or "uid" not in item or "account" not in item:
+            print("  Classification row ignored: missing uid/account")
+            stats["error"] += 1
+            continue
 
-        key = process_item(item, email_map, account_map, stats)
-        if key is not None and key in email_map:
-            processed.add(key)
+        key = (str(item["uid"]), str(item["account"]))
+        if key not in email_map:
+            print(f"  Classification row ignored: unknown email {key[0]} / {key[1]}")
+            stats["error"] += 1
+            continue
+        if key in processed:
+            print(f"  Classification row ignored: duplicate email {key[0]} / {key[1]}")
+            stats["error"] += 1
+            continue
 
-    missing = set(email_map) - processed
+        processed.add(key)
+        process_item(item, email_map, account_map, stats)
+
+    missing = len(email_map) - len(processed)
     if missing:
-        print(f"  Classifier omitted {len(missing)} email(s); leaving them untouched")
-        stats["error"] += len(missing)
+        print(f"  Classification incomplete: {missing} email(s) had no result")
+        stats["error"] += missing
 
 
 def main():

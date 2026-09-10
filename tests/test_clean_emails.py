@@ -96,7 +96,7 @@ class ClassificationSafetyTests(unittest.TestCase):
         clean_emails.process_chunk([email], {"test": {"name": "test"}}, stats)
 
         self.assertEqual(stats["spam"], 1)
-        self.assertEqual(stats["error"], 0)
+        self.assertEqual(stats["error"], 1)
 
     @patch("clean_emails.classify_with_claude", return_value=[])
     def test_omitted_classification_is_counted_and_left_untouched(self, _classify):
@@ -118,6 +118,34 @@ class ClassificationSafetyTests(unittest.TestCase):
             clean_emails.resolve_category({"category": "delete-everything"}, email),
             "keep",
         )
+
+    def test_non_list_classifier_output_is_rejected(self):
+        email = {
+            "uid": "1",
+            "account": "test",
+            "from": "sender@example.test",
+            "subject": "message",
+        }
+        stats = {"spam": 0, "marketing": 0, "keep": 0, "error": 0}
+        with patch("clean_emails.classify_with_claude", return_value={"uid": "1"}):
+            clean_emails.process_chunk([email], {"test": {"name": "test"}}, stats)
+        self.assertEqual(stats["error"], 1)
+
+    def test_whitelist_matches_sender_domain_not_subject(self):
+        email = {
+            "from": "Attacker <evil@example.test>",
+            "subject": "trusted.example invoice",
+        }
+        with patch.object(clean_emails, "WHITELIST", ["trusted.example"]):
+            self.assertEqual(clean_emails.resolve_category({"category": "spam"}, email), "spam")
+
+    def test_whitelist_accepts_sender_subdomains(self):
+        email = {
+            "from": "Alerts <news@mail.trusted.example>",
+            "subject": "hello",
+        }
+        with patch.object(clean_emails, "WHITELIST", ["trusted.example"]):
+            self.assertEqual(clean_emails.resolve_category({"category": "spam"}, email), "keep")
 
 
 if __name__ == "__main__":
