@@ -10,6 +10,7 @@ import smtplib
 import shutil
 from datetime import datetime, timedelta
 from email.header import decode_header
+from urllib.parse import parse_qs
 from env import ACCOUNTS, WHITELIST
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -263,13 +264,12 @@ def do_unsubscribe(account, email_data):
     if mailto:
         try:
             addr, _, params = mailto.partition("?")
-            subject = "Unsubscribe"
-            body_text = "Unsubscribe"
-            for part in params.split("&"):
-                if part.startswith("subject="):
-                    subject = requests.utils.unquote(part[8:])
-                if part.startswith("body="):
-                    body_text = requests.utils.unquote(part[5:])
+            query = {
+                key.lower(): values
+                for key, values in parse_qs(params, keep_blank_values=True).items()
+            }
+            subject = query.get("subject", ["Unsubscribe"])[0]
+            body_text = query.get("body", ["Unsubscribe"])[0]
             with smtplib.SMTP(account["smtp_host"], account["smtp_port"]) as smtp:
                 smtp.starttls()
                 smtp.login(account["username"], account["password"])

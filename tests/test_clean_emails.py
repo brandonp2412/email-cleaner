@@ -27,6 +27,32 @@ class SafetyDefaultsTests(unittest.TestCase):
 
         response.raise_for_status.assert_called_once_with()
 
+    @patch("clean_emails.smtplib.SMTP")
+    def test_mailto_unsubscribe_decodes_query_values(self, smtp_class):
+        smtp = smtp_class.return_value.__enter__.return_value
+        account = {
+            "username": "user@example.test",
+            "password": "secret",
+            "smtp_host": "smtp.example.test",
+            "smtp_port": 587,
+        }
+        email_data = {
+            "uid": "42",
+            "from": "Sender <sender@example.test>",
+            "subject": "Sale",
+            "list_unsubscribe": (
+                "<mailto:unsubscribe@example.test?SUBJECT=Remove+Me"
+                "&body=Please+unsubscribe+me%21>"
+            ),
+        }
+
+        self.assertTrue(clean_emails.do_unsubscribe(account, email_data))
+
+        smtp.sendmail.assert_called_once()
+        sent_message = smtp.sendmail.call_args.args[2]
+        self.assertIn("Subject: Remove Me", sent_message)
+        self.assertIn("Please unsubscribe me!", sent_message)
+
     @patch("clean_emails.unsubscribe_via_claude", return_value=False)
     @patch("clean_emails.fetch_full_body", return_value="")
     @patch("clean_emails.visit_unsubscribe_url", side_effect=RuntimeError("failed"))
