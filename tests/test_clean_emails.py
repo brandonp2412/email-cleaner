@@ -27,6 +27,36 @@ class SafetyDefaultsTests(unittest.TestCase):
 
         response.raise_for_status.assert_called_once_with()
 
+    @patch("clean_emails.requests.post")
+    @patch("clean_emails.requests.get")
+    def test_rfc8058_one_click_uses_post(self, get, post):
+        response = Mock()
+        post.return_value = response
+        account = {
+            "username": "user@example.test",
+            "password": "secret",
+            "smtp_host": "smtp.example.test",
+            "smtp_port": 587,
+        }
+        email_data = {
+            "uid": "42",
+            "from": "Sender <sender@example.test>",
+            "subject": "Sale",
+            "list_unsubscribe": "<https://example.test/unsubscribe>",
+            "list_unsubscribe_post": "List-Unsubscribe=One-Click",
+        }
+
+        self.assertTrue(clean_emails.do_unsubscribe(account, email_data))
+
+        post.assert_called_once_with(
+            "https://example.test/unsubscribe",
+            data={"List-Unsubscribe": "One-Click"},
+            timeout=15,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        response.raise_for_status.assert_called_once_with()
+        get.assert_not_called()
+
     @patch("clean_emails.smtplib.SMTP")
     def test_mailto_unsubscribe_decodes_query_values(self, smtp_class):
         smtp = smtp_class.return_value.__enter__.return_value
