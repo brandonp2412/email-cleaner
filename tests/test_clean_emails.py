@@ -1,7 +1,7 @@
 import sys
 import types
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 fake_env = types.ModuleType("env")
 fake_env.ACCOUNTS = []
@@ -112,6 +112,35 @@ class SafetyDefaultsTests(unittest.TestCase):
         }
 
         self.assertFalse(clean_emails.do_unsubscribe(account, email_data))
+
+
+class ImapDeletionSafetyTests(unittest.TestCase):
+    def test_uidplus_uses_targeted_expunge(self):
+        mail = Mock()
+        mail.capabilities = (b"IMAP4rev1", b"UIDPLUS")
+        mail.uid.side_effect = [("OK", []), ("OK", [])]
+
+        clean_emails.expunge_uid_safely(mail, "42")
+
+        self.assertEqual(
+            mail.uid.call_args_list,
+            [
+                call("store", "42", "+FLAGS", "\\Deleted"),
+                call("expunge", "42"),
+            ],
+        )
+        mail.expunge.assert_not_called()
+
+    def test_non_uidplus_refuses_unrelated_pending_deletions(self):
+        mail = Mock()
+        mail.capabilities = (b"IMAP4rev1",)
+        mail.uid.return_value = ("OK", [b"99"])
+
+        with self.assertRaisesRegex(RuntimeError, "unrelated deleted messages"):
+            clean_emails.expunge_uid_safely(mail, "42")
+
+        mail.uid.assert_called_once_with("search", None, "DELETED")
+        mail.expunge.assert_not_called()
 
 
 class ClassificationSafetyTests(unittest.TestCase):

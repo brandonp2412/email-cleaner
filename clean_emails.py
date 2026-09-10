@@ -324,16 +324,49 @@ def do_unsubscribe(account, email_data):
 # IMAP actions
 # ---------------------------------------------------------------------------
 
+def expunge_uid_safely(mail, uid):
+    """Expunge only the requested UID without deleting unrelated pending messages."""
+    capabilities = {
+        capability.decode(errors="ignore").upper()
+        if isinstance(capability, bytes)
+        else str(capability).upper()
+        for capability in getattr(mail, "capabilities", ())
+    }
+
+    if "UIDPLUS" not in capabilities:
+        status, data = mail.uid("search", None, "DELETED")
+        if status != "OK" or not data:
+            raise RuntimeError("Could not inspect pending IMAP deletions safely")
+        pending = {
+            value.decode() if isinstance(value, bytes) else str(value)
+            for value in data[0].split()
+        }
+        unrelated = pending - {str(uid)}
+        if unrelated:
+            raise RuntimeError(
+                "Refusing global IMAP expunge while unrelated deleted messages are pending"
+            )
+
+    status, _ = mail.uid("store", uid, "+FLAGS", "\\Deleted")
+    if status != "OK":
+        raise RuntimeError(f"IMAP delete failed for uid {uid}")
+
+    if "UIDPLUS" in capabilities:
+        status, _ = mail.uid("expunge", uid)
+    else:
+        status, _ = mail.expunge()
+    if status != "OK":
+        raise RuntimeError(f"IMAP expunge failed for uid {uid}")
+
+
 def delete_email(account, uid):
     mail = imaplib.IMAP4_SSL(account["imap_host"], account["imap_port"])
     mail.login(account["username"], account["password"])
     mail.select("INBOX")
-    status, _ = mail.uid("store", uid, "+FLAGS", "\\Deleted")
-    if status != "OK":
+    try:
+        expunge_uid_safely(mail, uid)
+    finally:
         mail.logout()
-        raise RuntimeError(f"IMAP delete failed for uid {uid}")
-    mail.expunge()
-    mail.logout()
 
 
 def mark_spam_and_delete(account, uid):
@@ -348,12 +381,10 @@ def mark_spam_and_delete(account, uid):
             mail.logout()
             raise RuntimeError(f"Could not move uid {uid} to Gmail spam")
 
-    status, _ = mail.uid("store", uid, "+FLAGS", "\\Deleted")
-    if status != "OK":
+    try:
+        expunge_uid_safely(mail, uid)
+    finally:
         mail.logout()
-        raise RuntimeError(f"IMAP delete failed for uid {uid}")
-    mail.expunge()
-    mail.logout()
 
 
 # ---------------------------------------------------------------------------
