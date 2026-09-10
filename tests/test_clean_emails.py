@@ -67,7 +67,7 @@ class ClassificationSafetyTests(unittest.TestCase):
         classify.return_value = [classification, classification.copy()]
         stats = {"spam": 0, "marketing": 0, "keep": 0, "error": 0}
 
-        clean_emails.process_chunk([email], {"test": {}}, stats)
+        clean_emails.process_chunk([email], {"test": {"name": "test"}}, stats)
 
         self.assertEqual(stats["spam"], 1)
         self.assertEqual(stats["error"], 0)
@@ -82,7 +82,7 @@ class ClassificationSafetyTests(unittest.TestCase):
         }
         stats = {"spam": 0, "marketing": 0, "keep": 0, "error": 0}
 
-        clean_emails.process_chunk([email], {"test": {}}, stats)
+        clean_emails.process_chunk([email], {"test": {"name": "test"}}, stats)
 
         self.assertEqual(stats, {"spam": 0, "marketing": 0, "keep": 0, "error": 1})
 
