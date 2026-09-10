@@ -418,11 +418,15 @@ def process_chunk(chunk, account_map, stats):
     email_map = {(e["uid"], e["account"]): e for e in chunk}
     processed = set()
     for item in classifications:
+        candidate_key = None
+        if isinstance(item, dict) and item.get("uid") and item.get("account"):
+            candidate_key = (str(item["uid"]), str(item["account"]))
+            if candidate_key in processed:
+                print(f"  Duplicate classification for {candidate_key}; ignoring duplicate")
+                continue
+
         key = process_item(item, email_map, account_map, stats)
         if key is not None and key in email_map:
-            if key in processed:
-                print(f"  Duplicate classification for {key}; ignoring duplicate")
-                continue
             processed.add(key)
 
     missing = set(email_map) - processed
