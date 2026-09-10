@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import imaplib
 import email
+import html as html_lib
 import json
 import os
 import subprocess
@@ -178,9 +179,9 @@ def find_unsubscribe_in_body(html):
     for href, text in anchors:
         combined = (href + " " + re.sub(r"<[^>]+>", "", text)).lower()
         if any(k in combined for k in keywords):
-            return href
+            return html_lib.unescape(href)
     bare = re.findall(r'https?://[^\s"\'<>]+unsub[^\s"\'<>]*', html, re.IGNORECASE)
-    return bare[0] if bare else None
+    return html_lib.unescape(bare[0]) if bare else None
 
 
 def visit_unsubscribe_url(url, one_click=False):

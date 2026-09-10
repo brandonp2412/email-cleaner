@@ -57,6 +57,17 @@ class SafetyDefaultsTests(unittest.TestCase):
         response.raise_for_status.assert_called_once_with()
         get.assert_not_called()
 
+    def test_body_unsubscribe_link_decodes_html_entities(self):
+        body = (
+            '<a href="https://example.test/unsubscribe?user=42&amp;token=abc">'
+            'Unsubscribe</a>'
+        )
+
+        self.assertEqual(
+            clean_emails.find_unsubscribe_in_body(body),
+            "https://example.test/unsubscribe?user=42&token=abc",
+        )
+
     @patch("clean_emails.smtplib.SMTP")
     def test_mailto_unsubscribe_decodes_query_values(self, smtp_class):
         smtp = smtp_class.return_value.__enter__.return_value
