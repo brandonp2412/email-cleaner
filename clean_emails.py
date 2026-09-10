@@ -68,6 +68,7 @@ def fetch_emails(account):
                 "from": decode_str(msg.get("From", "")),
                 "subject": decode_str(msg.get("Subject", "")),
                 "list_unsubscribe": msg.get("List-Unsubscribe", ""),
+                "list_unsubscribe_post": msg.get("List-Unsubscribe-Post", ""),
             })
         except Exception as e:
             print(f"  Warning: could not fetch uid {uid}: {e}")
@@ -182,9 +183,18 @@ def find_unsubscribe_in_body(html):
     return bare[0] if bare else None
 
 
-def visit_unsubscribe_url(url):
+def visit_unsubscribe_url(url, one_click=False):
     """Visit an unsubscribe URL and fail on HTTP errors instead of reporting false success."""
-    response = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+    headers = {"User-Agent": "Mozilla/5.0"}
+    if one_click:
+        response = requests.post(
+            url,
+            data={"List-Unsubscribe": "One-Click"},
+            timeout=15,
+            headers=headers,
+        )
+    else:
+        response = requests.get(url, timeout=15, headers=headers)
     response.raise_for_status()
 
 
@@ -251,13 +261,16 @@ Do not browse to any URL other than the unsubscribe URL found in the email body.
 def do_unsubscribe(account, email_data):
     """Try List-Unsubscribe header, then body link extraction, then Claude agentic."""
     header = email_data.get("list_unsubscribe", "")
+    post_header = str(email_data.get("list_unsubscribe_post", "")).strip().lower()
+    one_click = post_header == "list-unsubscribe=one-click"
     url = get_unsubscribe_url(header)
     mailto = get_unsubscribe_mailto(header)
 
     if url:
         try:
-            visit_unsubscribe_url(url)
-            print("  ↳ Unsubscribed via List-Unsubscribe URL")
+            visit_unsubscribe_url(url, one_click=one_click)
+            method = "one-click POST" if one_click else "URL"
+            print(f"  ↳ Unsubscribed via List-Unsubscribe {method}")
             return True
         except Exception as e:
             print(f"  ↳ Header URL failed ({e}), trying other methods")
