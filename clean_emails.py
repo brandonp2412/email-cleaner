@@ -10,6 +10,7 @@ import smtplib
 import shutil
 from datetime import datetime, timedelta
 from email.header import decode_header
+from email.utils import parseaddr
 from env import ACCOUNTS, WHITELIST
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
@@ -327,9 +328,18 @@ def resolve_category(item, email_data):
     category = str(item.get("category", "keep")).strip().lower()
     if category not in {"spam", "marketing", "keep"}:
         category = "keep"
-    combined = (email_data["from"] + " " + email_data["subject"]).lower()
-    if any(w.lower() in combined for w in WHITELIST):
-        category = "keep"
+
+    sender = parseaddr(email_data.get("from", ""))[1].strip().lower()
+    sender_domain = sender.rpartition("@")[2] if "@" in sender else ""
+    for entry in WHITELIST:
+        allowed = str(entry).strip().lower().lstrip("@")
+        if not allowed:
+            continue
+        if "@" in allowed:
+            if sender == allowed:
+                return "keep"
+        elif sender_domain == allowed or sender_domain.endswith("." + allowed):
+            return "keep"
     return category
 
 

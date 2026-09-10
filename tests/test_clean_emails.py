@@ -96,6 +96,28 @@ def test_unknown_classifier_category_fails_safe_to_keep():
     )
 
 
+def test_whitelist_matches_sender_domain_not_subject(monkeypatch):
+    monkeypatch.setattr(clean_emails, "WHITELIST", ["trusted.example"])
+
+    category = clean_emails.resolve_category(
+        {"category": "spam"},
+        {"from": "Attacker <evil@example.test>", "subject": "trusted.example invoice"},
+    )
+
+    assert category == "spam"
+
+
+def test_whitelist_accepts_subdomains_of_sender_domain(monkeypatch):
+    monkeypatch.setattr(clean_emails, "WHITELIST", ["trusted.example"])
+
+    category = clean_emails.resolve_category(
+        {"category": "spam"},
+        {"from": "Alerts <news@mail.trusted.example>", "subject": "hello"},
+    )
+
+    assert category == "keep"
+
+
 def test_process_chunk_does_not_process_duplicate_classifier_rows(monkeypatch):
     chunk = [email_data()]
     result_stats = stats()

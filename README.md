@@ -57,7 +57,8 @@ ACCOUNTS = [
         "imap_port": 993,
         "smtp_host": "smtp.gmail.com",
         "smtp_port": 587,
-        "email": "you@gmail.com",
+        "name": "gmail_1",
+        "username": "you@gmail.com",
         "password": "your-app-password",   # Gmail: use an App Password
     }
 ]
