@@ -20,7 +20,7 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 # ---------------------------------------------------------------------------
 DAYS_BACK = 1       # How many days of email to scan
 CLAUDE_BIN = shutil.which("claude") or "/home/fdroid/.nvm/versions/node/v24.14.1/bin/claude"
-DRY_RUN = False      # Set False when you're happy with classifications
+DRY_RUN = True       # Safe default; set False only after reviewing dry-run output
 CHUNK_SIZE = 50     # Emails per Claude classification call
 
 # ---------------------------------------------------------------------------
@@ -235,7 +235,8 @@ def do_unsubscribe(account, email_data):
 
     if url:
         try:
-            requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            response = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            response.raise_for_status()
             print("  ↳ Unsubscribed via List-Unsubscribe URL")
             return
         except Exception as e:
@@ -277,7 +278,8 @@ def do_unsubscribe(account, email_data):
 
     if body_url:
         try:
-            requests.get(body_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            response = requests.get(body_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            response.raise_for_status()
             print("  ↳ Unsubscribed via body link")
             return
         except Exception as e:
@@ -322,7 +324,9 @@ def mark_spam_and_delete(account, uid):
 # ---------------------------------------------------------------------------
 
 def resolve_category(item, email_data):
-    category = item.get("category", "keep")
+    category = str(item.get("category", "keep")).strip().lower()
+    if category not in {"spam", "marketing", "keep"}:
+        category = "keep"
     combined = (email_data["from"] + " " + email_data["subject"]).lower()
     if any(w.lower() in combined for w in WHITELIST):
         category = "keep"
@@ -368,9 +372,36 @@ def process_chunk(chunk, account_map, stats):
         stats["error"] += len(chunk)
         return
 
+    if not isinstance(classifications, list):
+        print("  Classification failed: expected a JSON array")
+        stats["error"] += len(chunk)
+        return
+
     email_map = {(e["uid"], e["account"]): e for e in chunk}
+    processed = set()
     for item in classifications:
+        if not isinstance(item, dict) or "uid" not in item or "account" not in item:
+            print("  Classification row ignored: missing uid/account")
+            stats["error"] += 1
+            continue
+
+        key = (str(item["uid"]), str(item["account"]))
+        if key not in email_map:
+            print(f"  Classification row ignored: unknown email {key[0]} / {key[1]}")
+            stats["error"] += 1
+            continue
+        if key in processed:
+            print(f"  Classification row ignored: duplicate email {key[0]} / {key[1]}")
+            stats["error"] += 1
+            continue
+
+        processed.add(key)
         process_item(item, email_map, account_map, stats)
+
+    missing = len(email_map) - len(processed)
+    if missing:
+        print(f"  Classification incomplete: {missing} email(s) had no result")
+        stats["error"] += missing
 
 
 def main():

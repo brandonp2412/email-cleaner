@@ -37,6 +37,10 @@ def stats():
     return {"spam": 0, "marketing": 0, "keep": 0, "error": 0}
 
 
+def test_destructive_actions_are_disabled_by_default():
+    assert clean_emails.DRY_RUN is True
+
+
 def test_unsubscribe_http_error_falls_back_instead_of_reporting_success(monkeypatch):
     response = requests.Response()
     response.status_code = 500
@@ -90,3 +94,35 @@ def test_unknown_classifier_category_fails_safe_to_keep():
         )
         == "keep"
     )
+
+
+def test_process_chunk_does_not_process_duplicate_classifier_rows(monkeypatch):
+    chunk = [email_data()]
+    result_stats = stats()
+    monkeypatch.setattr(
+        clean_emails,
+        "classify_with_claude",
+        lambda _: [
+            {"uid": "42", "account": "test", "category": "keep"},
+            {"uid": "42", "account": "test", "category": "spam"},
+        ],
+    )
+
+    clean_emails.process_chunk(chunk, {"test": account()}, result_stats)
+
+    assert result_stats == {"spam": 0, "marketing": 0, "keep": 1, "error": 1}
+
+
+def test_process_chunk_counts_missing_classifier_rows_as_errors(monkeypatch):
+    second = {**email_data(), "uid": "43", "subject": "Another message"}
+    chunk = [email_data(), second]
+    result_stats = stats()
+    monkeypatch.setattr(
+        clean_emails,
+        "classify_with_claude",
+        lambda _: [{"uid": "42", "account": "test", "category": "keep"}],
+    )
+
+    clean_emails.process_chunk(chunk, {"test": account()}, result_stats)
+
+    assert result_stats == {"spam": 0, "marketing": 0, "keep": 1, "error": 1}
