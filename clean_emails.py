@@ -233,8 +233,9 @@ Instructions:
        browser.close()
    "
 4. If a page asks for your email address to confirm, use: {account['username']}
-5. Report what you did in one sentence.
-6. If you cannot find an unsubscribe link or the page requires a login, respond with exactly: SKIP
+5. If the unsubscribe definitely succeeded, respond with exactly: UNSUBSCRIBED
+6. If you cannot confirm success for any reason, including a missing link or required login, respond with exactly: SKIP
+7. Do not include any other text in the final response.
 
 Do not browse to any URL other than the unsubscribe URL found in the email body."""
 
@@ -260,7 +261,7 @@ Do not browse to any URL other than the unsubscribe URL found in the email body.
         return False
     output = response.get("result", "")
     print(f"  ↳ Claude: {output[:200]}")
-    return bool(output.strip()) and "SKIP" not in output.upper()
+    return output.strip().upper() == "UNSUBSCRIBED"
 
 
 def do_unsubscribe(account, email_data):

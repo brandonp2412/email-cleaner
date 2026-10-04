@@ -113,6 +113,36 @@ class SafetyDefaultsTests(unittest.TestCase):
 
         self.assertFalse(clean_emails.do_unsubscribe(account, email_data))
 
+    @patch("clean_emails.subprocess.run")
+    def test_agentic_unsubscribe_rejects_non_success_response(self, subprocess_run):
+        subprocess_run.return_value = Mock(
+            returncode=0,
+            stderr="",
+            stdout='{"result": "I could not complete the unsubscribe because login is required."}',
+        )
+
+        result = clean_emails.unsubscribe_via_claude(
+            {"username": "user@example.test"},
+            {"from": "sender@example.test", "subject": "Sale"},
+        )
+
+        self.assertFalse(result)
+
+    @patch("clean_emails.subprocess.run")
+    def test_agentic_unsubscribe_accepts_explicit_success_marker(self, subprocess_run):
+        subprocess_run.return_value = Mock(
+            returncode=0,
+            stderr="",
+            stdout='{"result": "UNSUBSCRIBED"}',
+        )
+
+        result = clean_emails.unsubscribe_via_claude(
+            {"username": "user@example.test"},
+            {"from": "sender@example.test", "subject": "Sale"},
+        )
+
+        self.assertTrue(result)
+
 
 class ImapConnectionCleanupTests(unittest.TestCase):
     @patch("clean_emails.imaplib.IMAP4_SSL")
