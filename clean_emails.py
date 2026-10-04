@@ -51,62 +51,66 @@ def fetch_emails(account):
     """Fetch email metadata from a single account via IMAP."""
     mail = imaplib.IMAP4_SSL(account["imap_host"], account["imap_port"])
     mail.login(account["username"], account["password"])
-    mail.select("INBOX")
+    try:
+        mail.select("INBOX")
 
-    since = (datetime.now() - timedelta(days=DAYS_BACK)).strftime("%d-%b-%Y")
-    _, data = mail.uid("search", None, f'(SINCE "{since}")')
-    msg_ids = data[0].split()
-    print(f"[{account['name']}] {len(msg_ids)} emails in last {DAYS_BACK} days")
+        since = (datetime.now() - timedelta(days=DAYS_BACK)).strftime("%d-%b-%Y")
+        _, data = mail.uid("search", None, f'(SINCE "{since}")')
+        msg_ids = data[0].split()
+        print(f"[{account['name']}] {len(msg_ids)} emails in last {DAYS_BACK} days")
 
-    emails = []
-    for uid in msg_ids:
-        try:
-            _, msg_data = mail.uid("fetch", uid, "(RFC822.HEADER)")
-            msg = email.message_from_bytes(msg_data[0][1])
-            emails.append({
-                "uid": uid.decode(),
-                "account": account["name"],
-                "from": decode_str(msg.get("From", "")),
-                "subject": decode_str(msg.get("Subject", "")),
-                "list_unsubscribe": msg.get("List-Unsubscribe", ""),
-                "list_unsubscribe_post": msg.get("List-Unsubscribe-Post", ""),
-            })
-        except Exception as e:
-            print(f"  Warning: could not fetch uid {uid}: {e}")
+        emails = []
+        for uid in msg_ids:
+            try:
+                _, msg_data = mail.uid("fetch", uid, "(RFC822.HEADER)")
+                msg = email.message_from_bytes(msg_data[0][1])
+                emails.append({
+                    "uid": uid.decode(),
+                    "account": account["name"],
+                    "from": decode_str(msg.get("From", "")),
+                    "subject": decode_str(msg.get("Subject", "")),
+                    "list_unsubscribe": msg.get("List-Unsubscribe", ""),
+                    "list_unsubscribe_post": msg.get("List-Unsubscribe-Post", ""),
+                })
+            except Exception as e:
+                print(f"  Warning: could not fetch uid {uid}: {e}")
 
-    mail.logout()
-    return emails
+        return emails
+    finally:
+        mail.logout()
 
 
 def fetch_full_body(account, uid):
     """Fetch the full HTML body of a specific email (for agentic unsubscribe)."""
     mail = imaplib.IMAP4_SSL(account["imap_host"], account["imap_port"])
     mail.login(account["username"], account["password"])
-    mail.select("INBOX")
+    try:
+        mail.select("INBOX")
 
-    _, msg_data = mail.uid("fetch", uid, "(RFC822)")
-    msg = email.message_from_bytes(msg_data[0][1])
+        _, msg_data = mail.uid("fetch", uid, "(RFC822)")
+        msg = email.message_from_bytes(msg_data[0][1])
 
-    body = ""
-    if msg.is_multipart():
-        for part in msg.walk():
-            ct = part.get_content_type()
-            if ct == "text/html":
-                payload = part.get_payload(decode=True)
-                if payload is not None:
-                    body = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
-                    break
-            if ct == "text/plain" and not body:
-                payload = part.get_payload(decode=True)
-                if payload is not None:
-                    body = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
-    else:
-        payload = msg.get_payload(decode=True)
-        if payload is not None:
-            body = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
+        body = ""
+        if msg.is_multipart():
+            for part in msg.walk():
+                ct = part.get_content_type()
+                if ct == "text/html":
+                    payload = part.get_payload(decode=True)
+                    if payload is not None:
+                        body = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
+                        break
+                if ct == "text/plain" and not body:
+                    payload = part.get_payload(decode=True)
+                    if payload is not None:
+                        body = payload.decode(part.get_content_charset() or "utf-8", errors="ignore")
+        else:
+            payload = msg.get_payload(decode=True)
+            if payload is not None:
+                body = payload.decode(msg.get_content_charset() or "utf-8", errors="ignore")
 
-    mail.logout()
-    return body
+        return body
+    finally:
+        mail.logout()
 
 
 # ---------------------------------------------------------------------------
@@ -362,8 +366,8 @@ def expunge_uid_safely(mail, uid):
 def delete_email(account, uid):
     mail = imaplib.IMAP4_SSL(account["imap_host"], account["imap_port"])
     mail.login(account["username"], account["password"])
-    mail.select("INBOX")
     try:
+        mail.select("INBOX")
         expunge_uid_safely(mail, uid)
     finally:
         mail.logout()
@@ -373,15 +377,14 @@ def mark_spam_and_delete(account, uid):
     """For Gmail: move to [Gmail]/Spam. For others: just delete."""
     mail = imaplib.IMAP4_SSL(account["imap_host"], account["imap_port"])
     mail.login(account["username"], account["password"])
-    mail.select("INBOX")
-
-    if "gmail.com" in account["imap_host"]:
-        status, _ = mail.uid("copy", uid, "[Gmail]/Spam")
-        if status != "OK":
-            mail.logout()
-            raise RuntimeError(f"Could not move uid {uid} to Gmail spam")
-
     try:
+        mail.select("INBOX")
+
+        if "gmail.com" in account["imap_host"]:
+            status, _ = mail.uid("copy", uid, "[Gmail]/Spam")
+            if status != "OK":
+                raise RuntimeError(f"Could not move uid {uid} to Gmail spam")
+
         expunge_uid_safely(mail, uid)
     finally:
         mail.logout()

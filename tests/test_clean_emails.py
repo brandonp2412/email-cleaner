@@ -114,6 +114,73 @@ class SafetyDefaultsTests(unittest.TestCase):
         self.assertFalse(clean_emails.do_unsubscribe(account, email_data))
 
 
+class ImapConnectionCleanupTests(unittest.TestCase):
+    @patch("clean_emails.imaplib.IMAP4_SSL")
+    def test_fetch_emails_logs_out_when_search_fails(self, imap_class):
+        mail = imap_class.return_value
+        mail.uid.side_effect = RuntimeError("search failed")
+        account = {
+            "name": "test",
+            "username": "user@example.test",
+            "password": "secret",
+            "imap_host": "imap.example.test",
+            "imap_port": 993,
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "search failed"):
+            clean_emails.fetch_emails(account)
+
+        mail.logout.assert_called_once_with()
+
+    @patch("clean_emails.imaplib.IMAP4_SSL")
+    def test_fetch_full_body_logs_out_when_fetch_fails(self, imap_class):
+        mail = imap_class.return_value
+        mail.uid.side_effect = RuntimeError("fetch failed")
+        account = {
+            "username": "user@example.test",
+            "password": "secret",
+            "imap_host": "imap.example.test",
+            "imap_port": 993,
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "fetch failed"):
+            clean_emails.fetch_full_body(account, "42")
+
+        mail.logout.assert_called_once_with()
+
+    @patch("clean_emails.imaplib.IMAP4_SSL")
+    def test_delete_email_logs_out_when_select_fails(self, imap_class):
+        mail = imap_class.return_value
+        mail.select.side_effect = RuntimeError("select failed")
+        account = {
+            "username": "user@example.test",
+            "password": "secret",
+            "imap_host": "imap.example.test",
+            "imap_port": 993,
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "select failed"):
+            clean_emails.delete_email(account, "42")
+
+        mail.logout.assert_called_once_with()
+
+    @patch("clean_emails.imaplib.IMAP4_SSL")
+    def test_mark_spam_logs_out_when_select_fails(self, imap_class):
+        mail = imap_class.return_value
+        mail.select.side_effect = RuntimeError("select failed")
+        account = {
+            "username": "user@example.test",
+            "password": "secret",
+            "imap_host": "imap.gmail.com",
+            "imap_port": 993,
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "select failed"):
+            clean_emails.mark_spam_and_delete(account, "42")
+
+        mail.logout.assert_called_once_with()
+
+
 class ImapDeletionSafetyTests(unittest.TestCase):
     def test_uidplus_uses_targeted_expunge(self):
         mail = Mock()
